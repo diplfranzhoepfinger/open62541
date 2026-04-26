@@ -48,27 +48,82 @@ Running suite(s): Util Ext2
 
 ---
 
-## Open / Pending Phases
+### Phase 2: WebSocket ConnectionManager ✅ COMPLETE
 
-### Phase 2: WebSocket ConnectionManager
-**Status:** 🔜 Not started  
-**Files:** `arch/posix/eventloop_posix_lws_ws.c` (new), `arch/posix/eventloop_posix_lws_ws.h` (new)  
 **Goal:** Implement a single ConnectionManager that handles both `ws://` and `wss://` connections (server and client) using libwebsockets.
 
-### Phase 3: Server Binary Protocol Integration
-**Status:** 🔜 Not started  
-**File:** `src/server/ua_server_binary.c`  
+#### Changes Made
+
+| File | Change |
+|------|--------|
+| `arch/posix/eventloop_posix_lws_ws.h` | **New** – Internal header with `UA_ConnectionManager_new_WS()` declaration |
+| `arch/posix/eventloop_posix_lws_ws.c` | **New** – Full ConnectionManager implementation using libwebsockets |
+| `include/open62541/plugin/eventloop.h` | Added public API declaration for `UA_ConnectionManager_new_WS()` with documentation |
+| `CMakeLists.txt` | Added WS source files to `UA_ENABLE_LWS` build block |
+
+#### Features
+- Server mode (`listen=true`): Opens listening port, accepts incoming WebSocket connections
+- Client mode (`listen=false`): Connects to remote WebSocket endpoints via `lws_client_connect_via_info()`
+- Subprotocols: `{"opcua", ""}` (max compatibility)
+- Binary frames only (`LWS_WRITE_BINARY`) for OPC UA binary protocol
+- TLS/WSS via `useSSL` parameter + optional `ssl-cert`/`ssl-key` for server
+- Reuses existing `eventloop_posix_lws.c` for EventLoop integration
+
+#### Commit
+```
+feat(ws): Add WebSocket ConnectionManager for opc.ws:// and opc.wss://
+Commit: 1777422df
+Files changed: 4 (+659 / -1)
+```
+
+---
+
+### Phase 3: Server Binary Protocol Integration ✅ COMPLETE
+
 **Goal:** Update `createServerConnection()` to select the `ws` ConnectionManager for `opc.ws://` / `opc.wss://` URLs.
 
-### Phase 4: Client Connection Integration
-**Status:** 🔜 Not started  
-**File:** `src/client/ua_client_connect.c`  
+#### Changes Made
+
+| File | Change |
+|------|--------|
+| `src/server/ua_server_binary.c` | `createServerConnection()`: Parse URL scheme (`tcp`/`ws`) and select matching ConnectionManager. Pass `useSSL=true` for `opc.wss://`. `addDiscoveryUrl()`: Preserve original scheme in discovery URLs instead of hardcoded `opc.tcp://`. Added `currentScheme` field to `UA_BinaryProtocolManager`. |
+
+#### Commit
+```
+feat(server/client): Integrate WebSocket protocol selection
+Commit: 6f46ee76b
+Files changed: 2 (+94 / -17)
+```
+
+---
+
+### Phase 4: Client Connection Integration ✅ COMPLETE
+
 **Goal:** Update `initConnect()` to use the `ws` ConnectionManager for WebSocket endpoint URLs.
 
-### Phase 5: Build System & Default Configuration
-**Status:** 🔜 Not started  
-**Files:** `CMakeLists.txt`, `plugins/ua_config_default.c`  
-**Goal:** Add `UA_ENABLE_WEBSOCKET_SERVER` CMake option and conditional manager registration.
+#### Changes Made
+
+| File | Change |
+|------|--------|
+| `src/client/ua_client_connect.c` | `initConnect()`: Parse URL scheme to select `tcp` or `ws` ConnectionManager. Pass `useSSL=true` for `opc.wss://`. |
+
+*(Same commit as Phase 3)*
+
+---
+
+### Phase 5: Build System & Default Configuration ✅ COMPLETE
+
+**Goal:** Integrate WS ConnectionManager into default server/client configuration.
+
+#### Changes Made
+
+| File | Change |
+|------|--------|
+| `plugins/ua_config_default.c` | Under `#ifdef UA_ENABLE_LWS`: Register `UA_ConnectionManager_new_WS()` in default EventLoop setup |
+
+**Note:** No separate `UA_ENABLE_WEBSOCKET_SERVER` CMake option needed. WS support is tied to existing `UA_ENABLE_LWS` which already includes libwebsockets.
+
+---
 
 ### Phase 6: Tests & Examples
 **Status:** 🔜 Not started  

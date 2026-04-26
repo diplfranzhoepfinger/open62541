@@ -345,6 +345,14 @@ setDefaultConfig(UA_ServerConfig *conf, UA_UInt16 portNumber) {
                          "Cannot create the Interrupt Manager (only relevant if used)");
         }
 #endif
+#ifdef UA_ENABLE_LWS
+        /* Add the WebSocket connection manager */
+        UA_ConnectionManager *wsCM =
+            UA_ConnectionManager_new_WS(UA_STRING("ws connection manager"));
+        if(wsCM)
+            conf->eventLoop->registerEventSource(conf->eventLoop, (UA_EventSource *)wsCM);
+#endif
+
 #ifdef UA_ENABLE_MQTT
         /* Add the MQTT connection manager */
         UA_ConnectionManager *mqttCM =
