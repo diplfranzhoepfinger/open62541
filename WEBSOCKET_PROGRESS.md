@@ -125,10 +125,33 @@ Files changed: 2 (+94 / -17)
 
 ---
 
-### Phase 6: Tests & Examples
-**Status:** 🔜 Not started  
-**Files:** `tests/check_eventloop_ws.c` (new), `examples/server_ws.c` (new), `examples/client_ws.c` (new)  
+### Phase 6: Tests & Examples ✅ COMPLETE
+
 **Goal:** EventLoop integration tests and minimal server/client examples.
+
+#### Changes Made
+
+| File | Change |
+|------|--------|
+| `tests/check_eventloop_ws.c` | **New** – Unit test for WS ConnectionManager lifecycle (create/start/stop) |
+| `examples/server_ws.c` | **New** – Minimal OPC UA server on `opc.ws://localhost:4840` |
+| `examples/client_ws.c` | **New** – Minimal OPC UA client connecting via `opc.ws://` |
+| `tests/CMakeLists.txt` | Added `check_eventloop_ws.c` to test suite under `UA_ENABLE_LWS` |
+| `examples/CMakeLists.txt` | Added `server_ws` and `client_ws` example targets |
+
+#### Test Results
+
+```
+Running suite(s): Test WS EventLoop
+100%: Checks: 1, Failures: 0, Errors: 0
+```
+
+#### Commit
+```
+feat(tests/examples): Add WebSocket test and examples
+Commit: 1c150f60e
+Files changed: 6 (+224 / -11)
+```
 
 ---
 
