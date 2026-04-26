@@ -900,8 +900,6 @@ createServerConnection(UA_BinaryProtocolManager *bpm, const UA_String *serverUrl
         scheme = UA_STRING("opc.wss");
         useSSL = true;
     } else {
-        UA_String_clear(&hostname);
-        UA_String_clear(&path);
         return UA_STATUSCODE_BADTCPENDPOINTURLINVALID;
     }
 
@@ -954,14 +952,13 @@ createServerConnection(UA_BinaryProtocolManager *bpm, const UA_String *serverUrl
         /* Open the server connection */
         res = cm->openConnection(cm, &paramsMap, bpm, NULL, serverNetworkCallback);
         if(res == UA_STATUSCODE_GOOD) {
-            UA_String_clear(&hostname);
-            UA_String_clear(&path);
+            /* hostname and path are non-owning pointers into serverUrl->data;
+             * do not call UA_String_clear on them */
             return res;
         }
     }
 
-    UA_String_clear(&hostname);
-    UA_String_clear(&path);
+    /* hostname and path borrow from serverUrl — no UA_String_clear needed */
     UA_String_clear(&bpm->currentScheme);
     return UA_STATUSCODE_BADINTERNALERROR;
 }
