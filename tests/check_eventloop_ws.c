@@ -363,6 +363,56 @@ START_TEST(wsSawtoothTransfer) {
     el->free(el);
 } END_TEST
 
+/* Reproduces the server startup crash: ua_server_binary.c's createServerConnection
+ * passes the address via UA_Variant_setArray (array of strings), but WS_openConnection
+ * reads it with UA_KeyValueMap_getScalar, which returns NULL for arrays. This causes
+ * lws to receive no interface and bind to 0.0.0.0+:: (dual-stack), which crashes. */
+START_TEST(wsListenAddressAsArray) {
+    resetTestState();
+
+    UA_ConnectionManager *cm = UA_ConnectionManager_new_WS(UA_STRING("wsCM"));
+    ck_assert_ptr_nonnull(cm);
+
+    UA_EventLoop *el = UA_EventLoop_new_POSIX(UA_Log_Stdout);
+    ck_assert_ptr_nonnull(el);
+
+    UA_StatusCode res = el->registerEventSource(el, &cm->eventSource);
+    ck_assert_uint_eq(res, UA_STATUSCODE_GOOD);
+    res = el->start(el);
+    ck_assert_uint_eq(res, UA_STATUSCODE_GOOD);
+
+    /* Pass address as an ARRAY of 1 element — exactly as createServerConnection does */
+    UA_String address = UA_STRING("127.0.0.1");
+    UA_UInt16 port = 4847;
+    UA_Boolean listen = true;
+
+    UA_KeyValuePair sp[4];
+    sp[0].key = UA_QUALIFIEDNAME(0, "address");
+    UA_Variant_setArray(&sp[0].value, &address, 1, &UA_TYPES[UA_TYPES_STRING]);
+    sp[1].key = UA_QUALIFIEDNAME(0, "port");
+    UA_Variant_setScalar(&sp[1].value, &port, &UA_TYPES[UA_TYPES_UINT16]);
+    sp[2].key = UA_QUALIFIEDNAME(0, "listen");
+    UA_Variant_setScalar(&sp[2].value, &listen, &UA_TYPES[UA_TYPES_BOOLEAN]);
+    sp[3].key = UA_QUALIFIEDNAME(0, "reuse");
+    UA_Variant_setScalar(&sp[3].value, &listen, &UA_TYPES[UA_TYPES_BOOLEAN]);
+    UA_KeyValueMap skvm = {4, sp};
+
+    void *sctx = (void*)1;
+    res = cm->openConnection(cm, &skvm, &testState, &sctx, serverConnectionCallback);
+    ck_assert_uint_eq(res, UA_STATUSCODE_GOOD);
+
+    for(int i = 0; i < 20; i++) el->run(el, 10);
+
+    el->stop(el);
+    int iteration = 0;
+    while(el->state != UA_EVENTLOOPSTATE_STOPPED && iteration < 50) {
+        el->run(el, 100);
+        iteration++;
+    }
+    ck_assert(el->state == UA_EVENTLOOPSTATE_STOPPED);
+    el->free(el);
+} END_TEST
+
 START_TEST(wsCreateManager) {
     /* Simply test that the WS ConnectionManager can be created and started */
     UA_ConnectionManager *cm = UA_ConnectionManager_new_WS(UA_STRING("wsCM"));
@@ -394,6 +444,7 @@ int main(void) {
     TCase *tc = tcase_create("test cases");
     tcase_set_timeout(tc, 30); /* 30 seconds timeout */
 	tcase_add_test(tc, wsCreateManager);
+    tcase_add_test(tc, wsListenAddressAsArray);
     tcase_add_test(tc, wsRoundtripEcho);
     tcase_add_test(tc, wsSawtoothTransfer);
     suite_add_tcase(s, tc);
