@@ -71,6 +71,16 @@ findWSConnection(WSConnectionManager *wcm, uintptr_t id) {
     return NULL;
 }
 
+static WSConnection *
+findWSConnectionByWsi(WSConnectionManager *wcm, struct lws *wsi) {
+    WSConnection *wc;
+    LIST_FOREACH(wc, &wcm->connections, next) {
+        if(wc->wsi == wsi)
+            return wc;
+    }
+    return NULL;
+}
+
 static void
 removeWSConnection(WSConnectionManager *wcm, WSConnection *wc);
 
@@ -87,46 +97,34 @@ notifyConnectionState(WSConnectionManager *wcm, WSConnection *wc,
 }
 
 /* User protocol callback. The protocol callback is the primary way lws
- * interacts with user code. */
+ * interacts with user code. We find the WSConnection by the wsi pointer
+ * to be independent of lws per_session_data handling. */
 static int
 callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
             void *user, void *in, size_t len) {
+    (void)user;
     struct lws_context *lws_cx = lws_get_context(wsi);
     WSConnectionManager *wcm = (WSConnectionManager*)lws_context_user(lws_cx);
     if(!wcm)
         return -1;
     UA_EventLoop *el = wcm->cm.eventSource.eventLoop;
-    WSConnection *wc = (user) ? *(WSConnection**)user : NULL;
 
     switch(reason) {
     case LWS_CALLBACK_WSI_DESTROY:
         /* Last callback for the wsi. Clean up if still present. */
-        if(wc && wc->wcm == wcm) {
-            LIST_REMOVE(wc, next);
-            wc->wcm = NULL; /* Mark as removed */
-            UA_ByteString_clear(&wc->sendBuffer);
-            UA_KeyValueMap_clear(&wc->params);
-            UA_free(wc);
-        }
-        /* Note: lws frees the per-session data (sizeof(void*)) itself */
         break;
 
     case LWS_CALLBACK_ESTABLISHED: {
-        /* New incoming server connection. lws stores only a void* pointer.
-         * We allocate the WSConnection ourselves. */
-        if(!wc) {
-            wc = (WSConnection*)UA_calloc(1, sizeof(WSConnection));
-            if(!wc)
-                return -1;
-            wc->wcm = wcm;
-            wc->connectionId = ++wcm->lastConnectionId;
-            wc->application = wcm->listenApplication;
-            wc->applicationCB = wcm->listenCallback;
-            LIST_INSERT_HEAD(&wcm->connections, wc, next);
-            /* Store pointer in per-session data */
-            *(WSConnection**)user = wc;
-        }
+        /* New incoming server connection. Allocate and track it. */
+        WSConnection *wc = (WSConnection*)UA_calloc(1, sizeof(WSConnection));
+        if(!wc)
+            return -1;
+        wc->wcm = wcm;
+        wc->connectionId = ++wcm->lastConnectionId;
+        wc->application = wcm->listenApplication;
+        wc->applicationCB = wcm->listenCallback;
         wc->wsi = wsi;
+        LIST_INSERT_HEAD(&wcm->connections, wc, next);
 
         /* Extract remote address */
         char rip[64];
@@ -143,14 +141,14 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
     }
 
     case LWS_CALLBACK_RECEIVE: {
+        WSConnection *wc = findWSConnectionByWsi(wcm, wsi);
         if(!wc)
-            return -1;
+            return 0;
         /* Only accept binary frames for OPC UA */
         if(lws_frame_is_binary(wsi) == 0) {
             UA_LOG_WARNING(el->logger, UA_LOGCATEGORY_NETWORK,
                            "WS %u\t| Received non-binary frame, ignoring",
                            (unsigned)wc->connectionId);
-            /* Don't close, just ignore */
             break;
         }
         UA_ByteString msg = {len, (UA_Byte*)in};
@@ -161,22 +159,26 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 
     case LWS_CALLBACK_SERVER_WRITEABLE:
     case LWS_CALLBACK_CLIENT_WRITEABLE: {
+        WSConnection *wc = findWSConnectionByWsi(wcm, wsi);
         if(!wc)
-            return -1;
+            return 0;
         if(wc->sendBuffer.length == 0) {
             wc->sendInProgress = false;
             break;
         }
-        /* Write data. lws_write may send less than the full buffer. */
+        /* Write data. lws_write may send less than the full buffer.
+         * sendBuffer.length = LWS_PRE + payload; lws_write takes only payload. */
         unsigned char *buf = wc->sendBuffer.data + LWS_PRE;
-        size_t total = wc->sendBuffer.length;
-        size_t written = lws_write(wsi, buf, total, LWS_WRITE_BINARY);
-        if(written < total) {
-            /* Partial write: move remaining data to the front.
-             * lws guarantees that at least some data was consumed. */
-            size_t remaining = total - written;
-            memmove(buf, buf + written, remaining);
-            wc->sendBuffer.length = remaining;
+        size_t total = wc->sendBuffer.length - LWS_PRE;
+        ssize_t w = lws_write(wsi, buf, total, LWS_WRITE_BINARY);
+        if(w < 0) {
+            UA_ByteString_clear(&wc->sendBuffer);
+            wc->sendInProgress = false;
+        } else if((size_t)w < total) {
+            /* Partial write: move remaining data to the front. */
+            size_t remaining = total - (size_t)w;
+            memmove(buf, buf + (size_t)w, remaining);
+            wc->sendBuffer.length = remaining + LWS_PRE;
             lws_callback_on_writable(wsi);
         } else {
             /* All data sent */
@@ -186,30 +188,38 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
         break;
     }
 
-    case LWS_CALLBACK_CLOSED:
+    case LWS_CALLBACK_CLOSED: {
+        WSConnection *wc = findWSConnectionByWsi(wcm, wsi);
         if(wc) {
             wc->wsi = NULL;
             notifyConnectionState(wcm, wc, UA_CONNECTIONSTATE_CLOSING,
                                   &UA_KEYVALUEMAP_NULL, UA_BYTESTRING_NULL);
         }
         break;
+    }
 
-    case LWS_CALLBACK_CLIENT_ESTABLISHED:
-        if(!wc)
+    case LWS_CALLBACK_CLIENT_ESTABLISHED: {
+        WSConnection *wc = findWSConnectionByWsi(wcm, wsi);
+        if(!wc) {
+            UA_LOG_ERROR(el->logger, UA_LOGCATEGORY_NETWORK,
+                         "WS\t| CLIENT_ESTABLISHED but no wc found for wsi");
             return -1;
+        }
         wc->wsi = wsi;
         notifyConnectionState(wcm, wc, UA_CONNECTIONSTATE_ESTABLISHED,
                               &UA_KEYVALUEMAP_NULL, UA_BYTESTRING_NULL);
         break;
+    }
 
     case LWS_CALLBACK_CLIENT_RECEIVE: {
+        WSConnection *wc = findWSConnectionByWsi(wcm, wsi);
         if(!wc)
-            return -1;
+            return 0;
         if(lws_frame_is_binary(wsi) == 0) {
             UA_LOG_WARNING(el->logger, UA_LOGCATEGORY_NETWORK,
-                           "WS %u\t| Received non-binary frame, closing",
+                           "WS %u\t| Received non-binary frame, ignoring",
                            (unsigned)wc->connectionId);
-            return -1;
+            break;
         }
         UA_ByteString msg = {len, (UA_Byte*)in};
         notifyConnectionState(wcm, wc, UA_CONNECTIONSTATE_ESTABLISHED,
@@ -217,7 +227,8 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
         break;
     }
 
-    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
+    case LWS_CALLBACK_CLIENT_CONNECTION_ERROR: {
+        WSConnection *wc = findWSConnectionByWsi(wcm, wsi);
         if(wc) {
             UA_LOG_WARNING(el->logger, UA_LOGCATEGORY_NETWORK,
                            "WS %u\t| Client connection error",
@@ -227,6 +238,7 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
                                   &UA_KEYVALUEMAP_NULL, UA_BYTESTRING_NULL);
         }
         break;
+    }
 
     default:
         break;
@@ -235,11 +247,10 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
     return 0;
 }
 
-/* We store only a void* pointer in the per-session data. The actual
- * WSConnection is managed by us. */
+/* per_session_data_size is 0 because we find connections by wsi pointer. */
 static const struct lws_protocols protocols[] = {
-    {"opcua", callback_ws, sizeof(void*), 0, 0, NULL, 0},
-    {"",      callback_ws, sizeof(void*), 0, 0, NULL, 0},
+    {"opcua", callback_ws, 0, 0, 0, NULL, 0},
+    {"",      callback_ws, 0, 0, 0, NULL, 0},
     LWS_PROTOCOL_LIST_TERM
 };
 
