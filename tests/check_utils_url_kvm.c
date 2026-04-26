@@ -76,14 +76,22 @@ START_TEST(parse_url_https) {
     ck_assert(res != UA_STATUSCODE_GOOD);
 } END_TEST
 
+START_TEST(parse_url_ws) {
+    UA_String url = UA_STRING("opc.ws://host:8080");
+    UA_String host, path;
+    UA_UInt16 port = 0;
+    UA_StatusCode res = UA_parseEndpointUrl(&url, &host, &port, &path);
+    ck_assert_uint_eq(res, UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(port, 8080);
+} END_TEST
+
 START_TEST(parse_url_wss) {
     UA_String url = UA_STRING("opc.wss://host:8080");
     UA_String host, path;
     UA_UInt16 port = 0;
     UA_StatusCode res = UA_parseEndpointUrl(&url, &host, &port, &path);
-    /* BUG: opc.wss is a valid OPC UA endpoint scheme (Part 6) but
-     * UA_parseEndpointUrl does not support it. See COVERAGE_BUGS.md #6. */
-    ck_assert(res != UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(res, UA_STATUSCODE_GOOD);
+    ck_assert_uint_eq(port, 8080);
 } END_TEST
 
 /* ========== parseEndpointUrlEthernet ========== */
@@ -744,6 +752,7 @@ int main(void) {
     tcase_add_test(tc_url, parse_url_ipv6_noport);
     tcase_add_test(tc_url, parse_url_invalid);
     tcase_add_test(tc_url, parse_url_https);
+    tcase_add_test(tc_url, parse_url_ws);
     tcase_add_test(tc_url, parse_url_wss);
     tcase_add_test(tc_url, parse_url_ethernet);
     tcase_add_test(tc_url, parse_url_ethernet_vlan);
