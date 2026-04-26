@@ -413,6 +413,25 @@ START_TEST(wsListenAddressAsArray) {
     el->free(el);
 } END_TEST
 
+START_TEST(wsAllocFreeNetworkBuffer) {
+    UA_ConnectionManager *cm = UA_ConnectionManager_new_WS(UA_STRING("wsCM"));
+    ck_assert_ptr_nonnull(cm);
+    ck_assert_ptr_nonnull((void*)(uintptr_t)cm->allocNetworkBuffer);
+    ck_assert_ptr_nonnull((void*)(uintptr_t)cm->freeNetworkBuffer);
+
+    UA_ByteString buf = UA_BYTESTRING_NULL;
+    UA_StatusCode res = cm->allocNetworkBuffer(cm, 0, &buf, 1024);
+    ck_assert_uint_eq(res, UA_STATUSCODE_GOOD);
+    ck_assert_ptr_nonnull(buf.data);
+    ck_assert_uint_eq(buf.length, 1024);
+
+    cm->freeNetworkBuffer(cm, 0, &buf);
+    ck_assert_ptr_null(buf.data);
+    ck_assert_uint_eq(buf.length, 0);
+
+    cm->eventSource.free(&cm->eventSource);
+} END_TEST
+
 START_TEST(wsCreateManager) {
     /* Simply test that the WS ConnectionManager can be created and started */
     UA_ConnectionManager *cm = UA_ConnectionManager_new_WS(UA_STRING("wsCM"));
@@ -443,7 +462,8 @@ int main(void) {
     Suite *s = suite_create("Test WS");
     TCase *tc = tcase_create("test cases");
     tcase_set_timeout(tc, 30); /* 30 seconds timeout */
-	tcase_add_test(tc, wsCreateManager);
+    tcase_add_test(tc, wsCreateManager);
+    tcase_add_test(tc, wsAllocFreeNetworkBuffer);
     tcase_add_test(tc, wsListenAddressAsArray);
     tcase_add_test(tc, wsRoundtripEcho);
     tcase_add_test(tc, wsSawtoothTransfer);
