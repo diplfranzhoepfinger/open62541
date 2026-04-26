@@ -300,10 +300,18 @@ WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
     if(res != UA_STATUSCODE_GOOD)
         return res;
 
-    /* Extract parameters */
-    const UA_String *address = (const UA_String*)
-        UA_KeyValueMap_getScalar(params, UA_QUALIFIEDNAME(0, "address"),
-                                 &UA_TYPES[UA_TYPES_STRING]);
+    /* Extract parameters. The "address" parameter may be a scalar string or a
+     * 1-element array of strings (as passed by createServerConnection in
+     * ua_server_binary.c via UA_Variant_setArray). Handle both cases. */
+    const UA_Variant *addrVariant =
+        UA_KeyValueMap_get(params, UA_QUALIFIEDNAME(0, "address"));
+    const UA_String *address = NULL;
+    if(addrVariant && addrVariant->type == &UA_TYPES[UA_TYPES_STRING]) {
+        if(UA_Variant_isScalar(addrVariant))
+            address = (const UA_String*)addrVariant->data;
+        else if(addrVariant->arrayLength > 0)
+            address = (const UA_String*)addrVariant->data;
+    }
     const UA_UInt16 *port = (const UA_UInt16*)
         UA_KeyValueMap_getScalar(params, UA_QUALIFIEDNAME(0, "port"),
                                  &UA_TYPES[UA_TYPES_UINT16]);
@@ -378,11 +386,15 @@ WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
                 vhost_info.ssl_private_key_filepath = (const char*)sslKey->data;
         }
 
-        /* For listen we need an address string */
-        char addr_str[address->length + 1];
-        memcpy(addr_str, address->data, address->length);
-        addr_str[address->length] = '\0';
-        vhost_info.iface = addr_str;
+        /* Bind to the specified interface, or all interfaces if none given */
+        char addr_str[512];
+        if(address && address->length > 0 && address->length < sizeof(addr_str)) {
+            memcpy(addr_str, address->data, address->length);
+            addr_str[address->length] = '\0';
+            vhost_info.iface = addr_str;
+        } else {
+            vhost_info.iface = NULL;
+        }
 
         struct lws_vhost *vhost = lws_create_vhost(wcm->lwsContext, &vhost_info);
         if(!vhost) {
@@ -427,6 +439,14 @@ WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
     LIST_INSERT_HEAD(&wcm->connections, wc, next);
 
     /* Build connection info */
+    if(!address) {
+        UA_LOG_ERROR(el->logger, UA_LOGCATEGORY_NETWORK,
+                     "WS\t| Client connection requires an address");
+        LIST_REMOVE(wc, next);
+        UA_KeyValueMap_clear(&wc->params);
+        UA_free(wc);
+        return UA_STATUSCODE_BADINTERNALERROR;
+    }
     char addr_str[address->length + 1];
     memcpy(addr_str, address->data, address->length);
     addr_str[address->length] = '\0';
