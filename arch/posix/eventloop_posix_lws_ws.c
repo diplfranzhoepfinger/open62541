@@ -31,6 +31,9 @@ struct WSConnectionManager {
     /* Listen socket callback info (copied to accepted connections) */
     UA_ConnectionManager_connectionCallback listenCallback;
     void *listenApplication;
+    void *listenContext; /* persistent context pointer for the listen socket,
+                         * like TCP_FD.context — passed as &listenContext to
+                         * the callback so the callee can write back into it */
 };
 
 struct WSConnection {
@@ -409,17 +412,16 @@ WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
         /* Generate a connection ID for the server socket itself */
         uintptr_t serverConnId = ++wcm->lastConnectionId;
 
-        /* Notify application that server socket is opening */
-        connectionCallback(cm, serverConnId, application, context,
-                           UA_CONNECTIONSTATE_OPENING, &UA_KEYVALUEMAP_NULL,
-                           UA_BYTESTRING_NULL);
-
         /* Store listen callback info for accepted connections */
         wcm->listenCallback = connectionCallback;
         wcm->listenApplication = application;
+        wcm->listenContext = NULL;
 
-        /* Return the server connection ID as the context pointer */
-        *(void**)context = (void*)(uintptr_t)serverConnId;
+        /* Notify application via a persistent context pointer (like TCP_FD.context)
+         * so the callback can safely write back into *connectionContext. */
+        connectionCallback(cm, serverConnId, application, &wcm->listenContext,
+                           UA_CONNECTIONSTATE_OPENING, &UA_KEYVALUEMAP_NULL,
+                           UA_BYTESTRING_NULL);
 
         return UA_STATUSCODE_GOOD;
     }
@@ -553,6 +555,7 @@ WS_closeConnection(UA_ConnectionManager *cm, uintptr_t connectionId) {
                         "WS\t| Closing listen port %d", wcm->listenPort);
             wcm->hasListenPort = false;
             wcm->listenPort = 0;
+            wcm->listenContext = NULL;
             /* vhosts cannot be individually destroyed easily; full context
              * destroy will close them. For now, mark and clean on stop. */
             return UA_STATUSCODE_GOOD;
@@ -624,6 +627,7 @@ WS_eventSourceStop(UA_ConnectionManager *cm) {
     }
     wcm->hasListenPort = false;
     wcm->listenPort = 0;
+    wcm->listenContext = NULL;
 
     cm->eventSource.state = UA_EVENTSOURCESTATE_STOPPED;
 }
