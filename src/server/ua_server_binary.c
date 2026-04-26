@@ -81,6 +81,9 @@ typedef struct {
     LIST_HEAD(, reverse_connect_context) reverseConnects;
     UA_UInt64 reverseConnectsCheckHandle;
     UA_UInt64 lastReverseConnectHandle;
+
+    /* Temporary storage for the scheme of the URL currently being processed */
+    UA_String currentScheme;
 } UA_BinaryProtocolManager;
 
 void setReverseConnectState(UA_Server *server, reverse_connect_context *context,
@@ -676,9 +679,9 @@ createServerSecureChannel(UA_BinaryProtocolManager *bpm, UA_ConnectionManager *c
 }
 
 static void
-addDiscoveryUrl(UA_Server *server, const UA_String hostname, UA_UInt16 port) {
+addDiscoveryUrl(UA_Server *server, UA_String scheme, UA_String hostname, UA_UInt16 port) {
     char urlstr[1024];
-    mp_snprintf(urlstr, 1024, "opc.tcp://%S:%d", hostname, port);
+    mp_snprintf(urlstr, 1024, "%S://%S:%d", scheme, hostname, port);
     UA_String discoveryServerUrl = UA_STRING(urlstr);
 
     /* Check if the ServerUrl is already present in the DiscoveryUrl array.
@@ -749,8 +752,10 @@ serverNetworkCallbackLocked(UA_ConnectionManager *cm, uintptr_t connectionId,
         const UA_String *address = (const UA_String*)
             UA_KeyValueMap_getScalar(params, UA_QUALIFIEDNAME(0, "listen-address"),
                                      &UA_TYPES[UA_TYPES_STRING]);
-        if(port && address)
-            addDiscoveryUrl(bpm->sc.server, *address, *port);
+        if(port && address) {
+            addDiscoveryUrl(bpm->sc.server, bpm->currentScheme, *address, *port);
+            UA_String_clear(&bpm->currentScheme);
+        }
         return;
     }
 
@@ -877,18 +882,43 @@ createServerConnection(UA_BinaryProtocolManager *bpm, const UA_String *serverUrl
     if(res != UA_STATUSCODE_GOOD)
         return res;
 
-    UA_String tcpString = UA_STRING("tcp");
+    /* Determine the ConnectionManager protocol and scheme from the URL */
+    UA_String protocol = UA_STRING_NULL;
+    UA_String scheme = UA_STRING_NULL;
+    UA_Boolean useSSL = false;
+    if(serverUrl->length >= 10 &&
+       strncmp((char*)serverUrl->data, "opc.tcp://", 10) == 0) {
+        protocol = UA_STRING("tcp");
+        scheme = UA_STRING("opc.tcp");
+    } else if(serverUrl->length >= 9 &&
+              strncmp((char*)serverUrl->data, "opc.ws://", 9) == 0) {
+        protocol = UA_STRING("ws");
+        scheme = UA_STRING("opc.ws");
+    } else if(serverUrl->length >= 10 &&
+              strncmp((char*)serverUrl->data, "opc.wss://", 10) == 0) {
+        protocol = UA_STRING("ws");
+        scheme = UA_STRING("opc.wss");
+        useSSL = true;
+    } else {
+        UA_String_clear(&hostname);
+        UA_String_clear(&path);
+        return UA_STATUSCODE_BADTCPENDPOINTURLINVALID;
+    }
+
+    /* Store scheme temporarily for the discovery URL callback */
+    UA_String_copy(&scheme, &bpm->currentScheme);
+
     for(UA_EventSource *es = config->eventLoop->eventSources;
         es != NULL; es = es->next) {
         /* Is this a usable connection manager? */
         if(es->eventSourceType != UA_EVENTSOURCETYPE_CONNECTIONMANAGER)
             continue;
         UA_ConnectionManager *cm = (UA_ConnectionManager*)es;
-        if(!UA_String_equal(&tcpString, &cm->protocol))
+        if(!UA_String_equal(&protocol, &cm->protocol))
             continue;
 
         /* Set up the parameters */
-        UA_KeyValuePair params[4];
+        UA_KeyValuePair params[6];
         size_t paramsSize = 3;
 
         params[0].key = UA_QUALIFIEDNAME(0, "port");
@@ -909,16 +939,30 @@ createServerConnection(UA_BinaryProtocolManager *bpm, const UA_String *serverUrl
             paramsSize = 4;
         }
 
+        /* WebSocket specific parameters */
+        UA_String wsString = UA_STRING("ws");
+        if(UA_String_equal(&protocol, &wsString)) {
+            params[paramsSize].key = UA_QUALIFIEDNAME(0, "useSSL");
+            UA_Variant_setScalar(&params[paramsSize].value, &useSSL, &UA_TYPES[UA_TYPES_BOOLEAN]);
+            paramsSize++;
+        }
+
         UA_KeyValueMap paramsMap;
         paramsMap.map = params;
         paramsMap.mapSize = paramsSize;
 
         /* Open the server connection */
         res = cm->openConnection(cm, &paramsMap, bpm, NULL, serverNetworkCallback);
-        if(res == UA_STATUSCODE_GOOD)
+        if(res == UA_STATUSCODE_GOOD) {
+            UA_String_clear(&hostname);
+            UA_String_clear(&path);
             return res;
+        }
     }
 
+    UA_String_clear(&hostname);
+    UA_String_clear(&path);
+    UA_String_clear(&bpm->currentScheme);
     return UA_STATUSCODE_BADINTERNALERROR;
 }
 
