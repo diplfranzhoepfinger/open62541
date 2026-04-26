@@ -27,6 +27,10 @@ struct WSConnectionManager {
     UA_EventLoop *foreign_loop;
     UA_Boolean hasListenPort;
     UA_UInt16 listenPort;
+
+    /* Listen socket callback info (copied to accepted connections) */
+    UA_ConnectionManager_connectionCallback listenCallback;
+    void *listenApplication;
 };
 
 struct WSConnection {
@@ -92,24 +96,36 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
     if(!wcm)
         return -1;
     UA_EventLoop *el = wcm->cm.eventSource.eventLoop;
-    WSConnection *wc = (WSConnection*)user;
+    WSConnection *wc = (user) ? *(WSConnection**)user : NULL;
 
     switch(reason) {
     case LWS_CALLBACK_WSI_DESTROY:
         /* Last callback for the wsi. Clean up if still present. */
-        if(wc) {
+        if(wc && wc->wcm == wcm) {
             LIST_REMOVE(wc, next);
+            wc->wcm = NULL; /* Mark as removed */
             UA_ByteString_clear(&wc->sendBuffer);
             UA_KeyValueMap_clear(&wc->params);
             UA_free(wc);
         }
+        /* Note: lws frees the per-session data (sizeof(void*)) itself */
         break;
 
     case LWS_CALLBACK_ESTABLISHED: {
-        /* New incoming server connection. The wc is pre-allocated in
-         * the per-session data (user). */
-        if(!wc)
-            return -1;
+        /* New incoming server connection. lws stores only a void* pointer.
+         * We allocate the WSConnection ourselves. */
+        if(!wc) {
+            wc = (WSConnection*)UA_calloc(1, sizeof(WSConnection));
+            if(!wc)
+                return -1;
+            wc->wcm = wcm;
+            wc->connectionId = ++wcm->lastConnectionId;
+            wc->application = wcm->listenApplication;
+            wc->applicationCB = wcm->listenCallback;
+            LIST_INSERT_HEAD(&wcm->connections, wc, next);
+            /* Store pointer in per-session data */
+            *(WSConnection**)user = wc;
+        }
         wc->wsi = wsi;
 
         /* Extract remote address */
@@ -132,9 +148,10 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
         /* Only accept binary frames for OPC UA */
         if(lws_frame_is_binary(wsi) == 0) {
             UA_LOG_WARNING(el->logger, UA_LOGCATEGORY_NETWORK,
-                           "WS %u\t| Received non-binary frame, closing",
+                           "WS %u\t| Received non-binary frame, ignoring",
                            (unsigned)wc->connectionId);
-            return -1; /* Close connection */
+            /* Don't close, just ignore */
+            break;
         }
         UA_ByteString msg = {len, (UA_Byte*)in};
         notifyConnectionState(wcm, wc, UA_CONNECTIONSTATE_ESTABLISHED,
@@ -218,9 +235,11 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
     return 0;
 }
 
+/* We store only a void* pointer in the per-session data. The actual
+ * WSConnection is managed by us. */
 static const struct lws_protocols protocols[] = {
-    {"opcua", callback_ws, sizeof(WSConnection), 0, 0, NULL, 0},
-    {"",      callback_ws, sizeof(WSConnection), 0, 0, NULL, 0},
+    {"opcua", callback_ws, sizeof(void*), 0, 0, NULL, 0},
+    {"",      callback_ws, sizeof(void*), 0, 0, NULL, 0},
     LWS_PROTOCOL_LIST_TERM
 };
 
@@ -236,6 +255,7 @@ removeWSConnection(WSConnectionManager *wcm, WSConnection *wc) {
     }
 
     LIST_REMOVE(wc, next);
+    wc->wcm = NULL; /* Mark as removed before freeing */
 
     /* Notify if not already closed */
     notifyConnectionState(wcm, wc, UA_CONNECTIONSTATE_CLOSED,
@@ -256,7 +276,7 @@ static UA_StatusCode
 WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
                   void *application, void *context,
                   UA_ConnectionManager_connectionCallback connectionCallback) {
-    if(cm->eventSource.state != UA_EVENTSOURCETYPE_CONNECTIONMANAGER)
+    if(cm->eventSource.state != UA_EVENTSOURCESTATE_STARTED)
         return UA_STATUSCODE_BADINTERNALERROR;
 
     /* Check the parameters */
@@ -370,6 +390,10 @@ WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
         connectionCallback(cm, serverConnId, application, context,
                            UA_CONNECTIONSTATE_OPENING, &UA_KEYVALUEMAP_NULL,
                            UA_BYTESTRING_NULL);
+
+        /* Store listen callback info for accepted connections */
+        wcm->listenCallback = connectionCallback;
+        wcm->listenApplication = application;
 
         /* Return the server connection ID as the context pointer */
         *(void**)context = (void*)(uintptr_t)serverConnId;
