@@ -490,6 +490,20 @@ WS_openConnection(UA_ConnectionManager *cm, const UA_KeyValueMap *params,
 }
 
 static UA_StatusCode
+WS_allocNetworkBuffer(UA_ConnectionManager *cm, uintptr_t connectionId,
+                      UA_ByteString *buf, size_t bufSize) {
+    (void)cm; (void)connectionId;
+    return UA_ByteString_allocBuffer(buf, bufSize);
+}
+
+static void
+WS_freeNetworkBuffer(UA_ConnectionManager *cm, uintptr_t connectionId,
+                     UA_ByteString *buf) {
+    (void)cm; (void)connectionId;
+    UA_ByteString_clear(buf);
+}
+
+static UA_StatusCode
 WS_sendWithConnection(UA_ConnectionManager *cm, uintptr_t connectionId,
                       const UA_KeyValueMap *params, UA_ByteString *buf) {
     (void)params;
@@ -664,8 +678,8 @@ UA_ConnectionManager_new_WS(const UA_String eventSourceName) {
     wcm->cm.eventSource.free = (UA_StatusCode (*)(UA_EventSource*))WS_eventSourceDelete;
     wcm->cm.protocol = UA_STRING((char*)(uintptr_t)wsName);
     wcm->cm.openConnection = WS_openConnection;
-    wcm->cm.allocNetworkBuffer = NULL;
-    wcm->cm.freeNetworkBuffer = NULL;
+    wcm->cm.allocNetworkBuffer = WS_allocNetworkBuffer;
+    wcm->cm.freeNetworkBuffer = WS_freeNetworkBuffer;
     wcm->cm.sendWithConnection = WS_sendWithConnection;
     wcm->cm.closeConnection = WS_closeConnection;
     return &wcm->cm;
