@@ -198,6 +198,9 @@ START_TEST(wsSawtoothTransfer) {
     }
 
     /* 5) Validate results */
+    UA_LOG_INFO(UA_Log_Stdout, UA_LOGCATEGORY_USERLAND,
+                "TEST RESULT: valuesReceived=%u sawtoothValid=%d",
+                testState.valuesReceived, testState.sawtoothValid);
     ck_assert_uint_ge(testState.valuesReceived, 50); /* At least 50 values */
     ck_assert_msg(testState.sawtoothValid, "Sawtooth data was corrupted");
 
