@@ -2296,19 +2296,42 @@ initConnect(UA_Client *client) {
         return;
     }
 
-    /* Initialize the TCP connection */
-    UA_String tcpString = UA_STRING("tcp");
+    /* Determine the ConnectionManager protocol from the URL scheme */
+    UA_String protocol = UA_STRING_NULL;
+    UA_Boolean useSSL = false;
+    if(client->config.endpointUrl.length >= 10 &&
+       strncmp((char*)client->config.endpointUrl.data, "opc.tcp://", 10) == 0) {
+        protocol = UA_STRING("tcp");
+    } else if(client->config.endpointUrl.length >= 9 &&
+              strncmp((char*)client->config.endpointUrl.data, "opc.ws://", 9) == 0) {
+        protocol = UA_STRING("ws");
+    } else if(client->config.endpointUrl.length >= 10 &&
+              strncmp((char*)client->config.endpointUrl.data, "opc.wss://", 10) == 0) {
+        protocol = UA_STRING("ws");
+        useSSL = true;
+    } else {
+        UA_LOG_WARNING(client->config.logging, UA_LOGCATEGORY_CLIENT,
+                       "Endpoint URL scheme not supported: %S",
+                       client->config.endpointUrl);
+        UA_String_clear(&hostname);
+        client->connectStatus = UA_STATUSCODE_BADTCPENDPOINTURLINVALID;
+        return;
+    }
+
+    /* Initialize the connection */
     for(UA_EventSource *es = client->config.eventLoop->eventSources;
         es != NULL; es = es->next) {
         /* Is this a usable connection manager? */
         if(es->eventSourceType != UA_EVENTSOURCETYPE_CONNECTIONMANAGER)
             continue;
         UA_ConnectionManager *cm = (UA_ConnectionManager*)es;
-        if(!UA_String_equal(&tcpString, &cm->protocol))
+        if(!UA_String_equal(&protocol, &cm->protocol))
             continue;
 
         /* Set up the parameters */
-        UA_KeyValuePair params[3];
+        UA_KeyValuePair params[4];
+        size_t paramsSize = 3;
+
         params[0].key = UA_QUALIFIEDNAME(0, "port");
         UA_Variant_setScalar(&params[0].value, &port, &UA_TYPES[UA_TYPES_UINT16]);
         params[1].key = UA_QUALIFIEDNAME(0, "address");
@@ -2317,9 +2340,17 @@ initConnect(UA_Client *client) {
         UA_Variant_setScalar(&params[2].value, &client->config.tcpReuseAddr,
                              &UA_TYPES[UA_TYPES_BOOLEAN]);
 
+        /* WebSocket specific parameters */
+        UA_String wsString = UA_STRING("ws");
+        if(UA_String_equal(&protocol, &wsString)) {
+            params[paramsSize].key = UA_QUALIFIEDNAME(0, "useSSL");
+            UA_Variant_setScalar(&params[paramsSize].value, &useSSL, &UA_TYPES[UA_TYPES_BOOLEAN]);
+            paramsSize++;
+        }
+
         UA_KeyValueMap paramMap;
         paramMap.map = params;
-        paramMap.mapSize = 3;
+        paramMap.mapSize = paramsSize;
 
         /* Open the client TCP connection */
         res = cm->openConnection(cm, &paramMap, client, NULL, __Client_networkCallback);
@@ -2338,6 +2369,8 @@ initConnect(UA_Client *client) {
                        client->config.endpointUrl);
         setConnectStatus(client, UA_STATUSCODE_BADCONNECTIONCLOSED);
     }
+
+    UA_String_clear(&hostname);
 }
 
 void

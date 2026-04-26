@@ -727,6 +727,30 @@ UA_EXPORT UA_ConnectionManager *
 UA_ConnectionManager_new_HTTP(const UA_String eventSourceName);
 
 /**
+ * WebSocket Connection Manager
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ * The WebSocket ConnectionManager uses the libwebsockets library to manage
+ * WebSocket connections. It supports both server (listening) and client
+ * connections. The protocol string is "ws" for both encrypted (wss) and
+ * unencrypted (ws) variants. TLS is enabled via the `useSSL` parameter.
+ *
+ * Open Connection Parameters:
+ * - 0:address [string]: Hostname or IP address (required).
+ * - 0:port [uint16]: Port number (required).
+ * - 0:listen [bool]: If true, open a server listening socket (default: false).
+ * - 0:reuse [bool]: Allow address reuse (default: false).
+ * - 0:useSSL [bool]: Enable TLS/WSS (default: false).
+ * - 0:ssl-cert [string]: Path to SSL certificate file (server only).
+ * - 0:ssl-key [string]: Path to SSL private key file (server only).
+ *
+ * Send Parameters:
+ * - No additional send parameters. Data is sent as WebSocket binary frames.
+ * */
+UA_EXPORT UA_ConnectionManager *
+UA_ConnectionManager_new_WS(const UA_String eventSourceName);
+
+/**
  * MQTT Connection Manager
  * ~~~~~~~~~~~~~~~~~~~~~~~
  * The MQTT ConnectionManager reuses the TCP ConnectionManager that is
