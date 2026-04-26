@@ -252,8 +252,9 @@ callback_ws(struct lws *wsi, enum lws_callback_reasons reason,
 
 /* per_session_data_size is 0 because we find connections by wsi pointer. */
 static const struct lws_protocols protocols[] = {
-    {"opcua", callback_ws, 0, 0, 0, NULL, 0},
-    {"",      callback_ws, 0, 0, 0, NULL, 0},
+    {"opcua",      callback_ws, 0, 0, 0, NULL, 0},
+    {"opcua+uacp", callback_ws, 0, 0, 0, NULL, 0},
+    {"",           callback_ws, 0, 0, 0, NULL, 0},
     LWS_PROTOCOL_LIST_TERM
 };
 
