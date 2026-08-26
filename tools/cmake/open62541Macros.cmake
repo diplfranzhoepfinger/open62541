@@ -164,7 +164,7 @@ endfunction()
 function(ua_generate_datatypes)
     find_package(Python3 REQUIRED)
     set(options BUILTIN INTERNAL AUTOLOAD GEN_DOC)
-    set(oneValueArgs NAME TARGET_SUFFIX TARGET_PREFIX OUTPUT_DIR FILE_XML FILE_CSV)
+    set(oneValueArgs NAME TARGET_SUFFIX TARGET_PREFIX OUTPUT_DIR FILE_XML FILE_CSV MEMBERS_EXTRAM_ATTR)
     set(multiValueArgs FILES_BSD IMPORT_BSD FILES_SELECTED)
     cmake_parse_arguments(UA_GEN_DT "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
 
@@ -235,6 +235,11 @@ function(ua_generate_datatypes)
         set(FILE_XML "--xml=${UA_GEN_DT_FILE_XML}")
     endif()
 
+    set(MEMBERS_EXTRAM_ATTR_ARG "")
+    if(UA_GEN_DT_MEMBERS_EXTRAM_ATTR)
+        set(MEMBERS_EXTRAM_ATTR_ARG "--members-extram-attr=${UA_GEN_DT_MEMBERS_EXTRAM_ATTR}")
+    endif()
+
     # Command generating the DataType code files
     add_custom_command(COMMAND ${ARG_CONV_EXCL_ENV} ${Python3_EXECUTABLE}
                                ${open62541_TOOLS_DIR}/generate_datatypes.py
@@ -245,6 +250,7 @@ function(ua_generate_datatypes)
                                --type-csv=${UA_GEN_DT_FILE_CSV}
                                ${UA_GEN_DT_NO_BUILTIN}
                                ${UA_GEN_DT_INTERNAL_ARG}
+                               ${MEMBERS_EXTRAM_ATTR_ARG}
                                ${UA_GEN_DT_OUTPUT_DIR}/${UA_GEN_DT_NAME}
                                ${UA_GEN_DOC_ARG}
                        OUTPUT  ${UA_GEN_DT_OUTPUT_DIR}/${UA_GEN_DT_NAME}_generated.c
